@@ -1,19 +1,14 @@
-const joi = require('joi');
+const serverError = (responseObject) => {
+  return responseObject.status(500).send({
+    message: 'Internal server error. Please try again later',
+    success: false,
+  });
+};
 
-const loginSchema = joi.object({
-  password: joi.string().required(),
-  email: joi.string().required().email(),
-});
+const userNotFound = (responseObject) => {
+  return responseObject
+    .status(404)
+    .send({ message: 'User not found', success: false });
+};
 
-const registerSchema = joi.object({
-  name: joi.string().min(3).max(30).required(),
-  password: joi.string().min(6).max(30).required(),
-  email: joi.string().required().email(),
-});
-
-const updateUserSchema = joi.object({
-  name: joi.string().min(3).max(30),
-  email: joi.string().email(),
-});
-
-module.exports = { loginSchema, registerSchema, updateUserSchema };
+module.exports = { serverError, userNotFound };

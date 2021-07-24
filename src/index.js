@@ -1,9 +1,17 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const mysql = require('mysql');
 
-require('./db');
-const User = require('./model/user');
-const { loginSchema, registerSchema, updateUserSchema } = require('./utils');
+const { loginSchema, registerSchema, updateUserSchema } = require('./schemas');
+const { serverError, userNotFound } = require('./utils');
+
+// Create mysql connection
+const db = mysql.createConnection({
+  host: 'localhost',
+  user: 'root',
+  password: '',
+  database: 'test',
+});
 
 const app = express();
 app.use(express.json());
@@ -13,29 +21,37 @@ app.post('/login', async (req, res) => {
     const validationResult = loginSchema.validate(req.body);
 
     if (validationResult.error) {
-      return res
-        .status(400)
-        .send({ message: validationResult.error.details[0].message });
+      return res.status(400).send({
+        message: validationResult.error.details[0].message,
+        success: flase,
+      });
     }
 
-    let user = await User.findOne({ email: req.body.email });
-    if (!user) {
-      return res.status(404).send({ message: 'user not found' });
-    }
+    const query = `SELECT password from users where email='${req.body.email}'`;
 
-    const isValid = await bcrypt.compare(req.body.password, user.password);
+    db.query(query, async (err, result) => {
+      if (err) {
+        throw new Error(err);
+      }
 
-    if (!isValid) {
-      return res.status(400).send({ message: 'Invalid credentials' });
-    }
+      if (!result.length) {
+        return userNotFound(res);
+      }
 
-    user = user.toObject();
-    delete user.password;
-    return res.send(user);
+      const isValid = await bcrypt.compare(
+        req.body.password,
+        result[0].password
+      );
+
+      if (!isValid) {
+        return res
+          .status(400)
+          .send({ message: 'Invalid Credentials', success: false });
+      }
+      return res.send({ message: 'Login Successful', success: true });
+    });
   } catch (error) {
-    return res
-      .status(500)
-      .send({ message: 'Internal server error. Please try again later' });
+    return serverError(res);
   }
 });
 
@@ -44,47 +60,58 @@ app.post('/register', async (req, res) => {
     const validationResult = registerSchema.validate(req.body);
 
     if (validationResult.error) {
-      return res
-        .status(400)
-        .send({ message: validationResult.error.details[0].message });
-    }
-    const currentUser = await User.findOne({ email: req.body.email });
-    if (currentUser) {
-      return res.status(400).send({ message: 'Email already exist.' });
+      return res.status(400).send({
+        message: validationResult.error.details[0].message,
+        success: false,
+      });
     }
 
-    const body = { ...req.body };
-    body.password = await bcrypt.hash(body.password, 8);
+    const query = `SELECT id from users WHERE email='${req.body.email}'`;
+    db.query(query, async (err, result) => {
+      if (err) {
+        throw err;
+      }
 
-    const user = new User(body);
-    await user.save();
+      if (result.length) {
+        return userNotFound(res);
+      }
 
-    const tempUser = user.toObject();
-    delete tempUser.password;
+      const body = { ...req.body };
+      body.password = await bcrypt.hash(body.password, 8);
 
-    return res.send(tempUser);
+      const insertQuery = `INSERT into users SET?;`;
+      db.query(insertQuery, body, (err, response) => {
+        if (err) {
+          throw new Error(err);
+        }
+
+        return res.send({
+          message: 'User created successfully.',
+          success: true,
+        });
+      });
+    });
   } catch (err) {
-    return res
-      .status(500)
-      .send({ message: 'Internal server error. Please try again later' });
+    return serverError(res);
   }
 });
 
 app.get('/user/:id', async (req, res) => {
   try {
     const id = req.params.id;
-
-    const user = await User.findById(id);
-    if (!user) {
-      return res.status(404).send({ message: 'User not found' });
-    }
-    const tempUser = user.toObject();
-    delete tempUser.password;
-    return res.send(tempUser);
+    const query = `SELECT * from users WHERE id='${id}'`;
+    db.query(query, (err, result) => {
+      if (err) {
+        throw new Error(err);
+      }
+      if (!result.length) {
+        return userNotFound(res);
+      }
+      delete result[0].password;
+      return res.send(result);
+    });
   } catch (error) {
-    return res
-      .status(500)
-      .send({ message: 'Internal server error. Please try again later' });
+    return serverError(res);
   }
 });
 
@@ -94,45 +121,57 @@ app.post('/update/:id', async (req, res) => {
     const validationResult = updateUserSchema.validate(req.body);
 
     if (validationResult.error) {
-      return res
-        .status(400)
-        .send({ message: validationResult.error.details[0].message });
+      return res.status(400).send({
+        message: validationResult.error.details[0].message,
+        success: false,
+      });
     }
 
-    const user = await User.findByIdAndUpdate(id, req.body, {
-      useFindAndModify: false,
-      new: true,
+    const selectQuery = `SELECT id from users where id='${id}'`;
+    db.query(selectQuery, (error, result) => {
+      if (error) {
+        throw new Error(error);
+      }
+
+      if (!result.length) {
+        return userNotFound(res);
+      }
+
+      const query = `UPDATE users SET ? WHERE id='${id}'`;
+
+      db.query(query, req.body, (err, result) => {
+        if (err) {
+          throw new Error(err);
+        }
+
+        return res.send({
+          message: 'Details updated successfully.',
+          success: true,
+        });
+      });
     });
-
-    if (!user) {
-      return res.status(404).send({ message: 'User not found' });
-    }
-
-    const tempUser = user.toObject();
-    delete tempUser.password;
-    return res.send(tempUser);
   } catch (error) {
-    return res
-      .status(500)
-      .send({ message: 'Internal server error. Please try again later' });
+    return serverError(res);
   }
 });
 
 app.delete('/user/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    const user = await User.findByIdAndDelete(id);
-    if (!user) {
-      return res.status(404).send({ message: 'User not found' });
-    }
+    const query = `DELETE from users where id='${id}'`;
+    db.query(query, (err, result) => {
+      if (err) {
+        throw new Error(err);
+      }
 
-    const tempUser = user.toObject();
-    delete tempUser.password;
-    return res.send(tempUser);
+      if (!result.affectedRows) {
+        return userNotFound(res);
+      }
+
+      return res.send({ message: 'User Deleted successfully', success: true });
+    });
   } catch (error) {
-    return res
-      .status(500)
-      .send({ message: 'Internal server error. Please try again later' });
+    return serverError(res);
   }
 });
 
